@@ -1,0 +1,78 @@
+# Archivos de configuración personal
+config.py
+.env
+
+# Archivos generados por Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+.venv/
+.env/
+.virtualenv/
+
+# Logs y archivos temporales
+logs/
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+.spyderproject
+.spyproject
+.ropeproject
+
+# Archivos específicos del proyecto
+# Permitir archivos de datos de ejemplo pero ignorar otros archivos de datos
+/datos/*.xlsx
+/datos/*.xls
+/datos/*.csv
+/datos/*.json
+# Excepciones - archivos que sí queremos incluir
+!/datos/agenda.xlsx
+!/datos/ejemplo_agenda.xlsx
+!requirements.json
+!example_data.json
+
+# Archivos de caché
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.coverage.*
+coverage.xml
+*.cover
