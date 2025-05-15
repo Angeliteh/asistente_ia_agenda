@@ -39,6 +39,12 @@ dependencies:
   http: ^1.1.0
   provider: ^6.0.5
 
+  # Dependencias para funcionalidad de voz
+  flutter_tts: ^4.0.0     # Para síntesis de voz
+  flutter_speech: ^2.0.0  # Paquete alternativo para reconocimiento de voz
+  permission_handler: ^11.3.0  # Para manejar permisos de micrófono
+  avatar_glow: ^2.0.2     # Para efectos visuales durante la grabación
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

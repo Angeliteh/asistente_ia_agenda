@@ -1,5 +1,5 @@
 # Archivos de configuración personal
-config.py
+# config.py - Comentado porque ahora es parte del repositorio
 .env
 
 # Archivos generados por Python
@@ -59,6 +59,8 @@ Thumbs.db
 /datos/*.xls
 /datos/*.csv
 /datos/*.json
+/datos/*.db
+/datos/cache.json
 # Excepciones - archivos que sí queremos incluir
 !/datos/agenda.xlsx
 !/datos/ejemplo_agenda.xlsx
@@ -76,3 +78,37 @@ htmlcov/
 .coverage.*
 coverage.xml
 *.cover
+
+# Archivos de resultados de pruebas
+resultados_pruebas/
+/resultados_pruebas/*.json
+/resultados_pruebas/*.txt
+
+# Archivos temporales del sistema de caché
+__cache__/
+*.cache
+
+# Archivos específicos de Flutter
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+# Archivos de Android
+**/android/gradlew
+**/android/gradlew.bat
+**/android/gradle/wrapper/gradle-wrapper.jar
+**/android/local.properties
+**/android/.gradle
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/key.properties
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
