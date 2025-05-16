@@ -71,6 +71,9 @@ def cargar_agenda_real(ruta_excel):
             "fecha_ingreso": "FECHA INGRESO A LA SEP"
         }
 
+        # Obtener todos los encabezados del Excel
+        todos_encabezados = df.columns.tolist()
+
         # Crear registros adaptados
         registros = []
         for _, row in df.iterrows():
@@ -89,47 +92,80 @@ def cargar_agenda_real(ruta_excel):
                 str(row["APELLIDO MATERNO"]) if pd.notna(row["APELLIDO MATERNO"]) else ""
             ]).strip()
 
-            # Crear registro adaptado
+            # Crear registro con todos los campos originales del Excel
             registro = {
-                "nombre": nombre_completo,
-                "nombre_alternativo": nombre_alternativo,
-                "telefono": str(row["TELÉFONO PARTICULAR"]) if pd.notna(row["TELÉFONO PARTICULAR"]) else "",
-                "celular": str(row["TELÉFONO CELULAR\n"]) if pd.notna(row["TELÉFONO CELULAR\n"]) else "",
-                "direccion": str(row["DOMICILIO PARTICULAR"]) if pd.notna(row["DOMICILIO PARTICULAR"]) else "",
-                "correo_electronico": str(row["DIRECCIÓN DE CORREO ELECTRÓNICO"]) if pd.notna(row["DIRECCIÓN DE CORREO ELECTRÓNICO"]) else "",
-                "estado_civil": str(row["ESTADO CIVIL"]) if pd.notna(row["ESTADO CIVIL"]) else "",
-                "rfc": str(row["FILIACIÓN O RFC CON HOMONIMIA"]) if pd.notna(row["FILIACIÓN O RFC CON HOMONIMIA"]) else "",
-                "curp": str(row["CURP"]) if pd.notna(row["CURP"]) else "",
-                "centro_trabajo": str(row["NOMBRE DEL C.T."]) if pd.notna(row["NOMBRE DEL C.T."]) else "",
-                "funcion": str(row["FUNCIÓN ESPECÍFICA"]) if pd.notna(row["FUNCIÓN ESPECÍFICA"]) else "",
-                "sector": str(row["SECTOR"]) if pd.notna(row["SECTOR"]) else "",
-                "zona": str(row["ZONA"]) if pd.notna(row["ZONA"]) else "",
-                "modalidad": str(row["MODALIDAD DEL CENTRO DE TRABAJO"]) if pd.notna(row["MODALIDAD DEL CENTRO DE TRABAJO"]) else "",
-                "estudios": str(row["ÚLTIMO GRADO DE ESTUDIOS"]) if pd.notna(row["ÚLTIMO GRADO DE ESTUDIOS"]) else "",
-                "fecha_ingreso": str(row["FECHA INGRESO A LA SEP"]) if pd.notna(row["FECHA INGRESO A LA SEP"]) else ""
+                # Campos básicos para compatibilidad
+                "nombre_completo": nombre_completo,
+                "nombre_alternativo": nombre_alternativo
             }
+
+            # Añadir todos los campos originales del Excel
+            for encabezado in todos_encabezados:
+                # Normalizar el nombre del campo para la base de datos (sin espacios ni caracteres especiales, todo minúsculas)
+                campo_db = encabezado.lower()
+                # Reemplazar caracteres especiales
+                for char in [" ", ".", "(", ")", "\n", "=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*"]:
+                    campo_db = campo_db.replace(char, "_")
+                # Eliminar guiones bajos múltiples
+                while "__" in campo_db:
+                    campo_db = campo_db.replace("__", "_")
+                # Eliminar guiones bajos al inicio y final
+                campo_db = campo_db.strip("_")
+
+                # Añadir el valor al registro
+                if pd.notna(row[encabezado]):
+                    registro[campo_db] = str(row[encabezado])
+                else:
+                    registro[campo_db] = ""
 
             registros.append(registro)
 
-        # Crear esquema simplificado
+        # Crear esquema dinámico basado en los encabezados del Excel
         esquema = {
-            "nombre": {"tipo_datos": "texto", "categoria": "nombre"},
-            "nombre_alternativo": {"tipo_datos": "texto", "categoria": "nombre"},
-            "telefono": {"tipo_datos": "texto", "categoria": "telefono"},
-            "celular": {"tipo_datos": "texto", "categoria": "telefono"},
-            "direccion": {"tipo_datos": "texto", "categoria": "direccion"},
-            "correo_electronico": {"tipo_datos": "texto", "categoria": "correo"},
-            "estado_civil": {"tipo_datos": "categoria", "categoria": "desconocido"},
-            "rfc": {"tipo_datos": "texto", "categoria": "identificador"},
-            "curp": {"tipo_datos": "texto", "categoria": "identificador"},
-            "centro_trabajo": {"tipo_datos": "texto", "categoria": "desconocido"},
-            "funcion": {"tipo_datos": "texto", "categoria": "desconocido"},
-            "sector": {"tipo_datos": "texto", "categoria": "desconocido"},
-            "zona": {"tipo_datos": "texto", "categoria": "desconocido"},
-            "modalidad": {"tipo_datos": "texto", "categoria": "desconocido"},
-            "estudios": {"tipo_datos": "texto", "categoria": "desconocido"},
-            "fecha_ingreso": {"tipo_datos": "fecha", "categoria": "desconocido"}
+            "nombre_completo": {"tipo_datos": "texto", "categoria": "nombre"},
+            "nombre_alternativo": {"tipo_datos": "texto", "categoria": "nombre"}
         }
+
+        # Añadir todos los campos originales al esquema
+        for encabezado in todos_encabezados:
+            # Normalizar el nombre del campo para la base de datos (sin espacios ni caracteres especiales, todo minúsculas)
+            campo_db = encabezado.lower()
+            # Reemplazar caracteres especiales
+            for char in [" ", ".", "(", ")", "\n", "=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*"]:
+                campo_db = campo_db.replace(char, "_")
+            # Eliminar guiones bajos múltiples
+            while "__" in campo_db:
+                campo_db = campo_db.replace("__", "_")
+            # Eliminar guiones bajos al inicio y final
+            campo_db = campo_db.strip("_")
+
+            # Determinar el tipo de datos y categoría
+            tipo_datos = "texto"
+            categoria = "desconocido"
+
+            # Categorizar algunos campos conocidos
+            if "teléfono" in encabezado.lower() or "telefono" in encabezado.lower() or "celular" in encabezado.lower():
+                categoria = "telefono"
+            elif "dirección" in encabezado.lower() or "direccion" in encabezado.lower() or "domicilio" in encabezado.lower():
+                categoria = "direccion"
+            elif "correo" in encabezado.lower() or "email" in encabezado.lower():
+                categoria = "correo"
+            elif "nombre" in encabezado.lower() or "apellido" in encabezado.lower():
+                categoria = "nombre"
+            elif "rfc" in encabezado.lower() or "curp" in encabezado.lower() or "filiación" in encabezado.lower():
+                categoria = "identificador"
+            elif "fecha" in encabezado.lower():
+                tipo_datos = "fecha"
+            elif "doble plaza" in encabezado.lower():
+                categoria = "doble_plaza"
+            elif "clave" in encabezado.lower() and "c.t." in encabezado.lower():
+                categoria = "clave_ct"
+
+            # Añadir al esquema
+            esquema[campo_db] = {"tipo_datos": tipo_datos, "categoria": categoria}
+
+        # Añadir información sobre todos los encabezados originales
+        esquema["encabezados_originales"] = todos_encabezados
 
         return {
             "registros": registros,

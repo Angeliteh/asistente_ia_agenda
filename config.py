@@ -56,6 +56,11 @@ MAX_RESULTS_DISPLAY = 50
 MAX_HISTORY_SIZE = 10
 MAX_REFINEMENTS = 2
 
+# Configuración del caché
+SEMANTIC_CACHE_ENABLED = True  # Cambiar a False para desactivar el caché semántico
+SEMANTIC_CACHE_MAX_SIZE = 1000
+SEMANTIC_CACHE_FILE = os.path.join(DATA_DIR, "semantic_cache.json")
+
 # Mapeo de atributos (para normalización)
 ATTRIBUTE_MAPPING = {
     "telefono": ["telefono", "celular", "teléfono", "móvil", "movil", "numero", "número", "contacto"],

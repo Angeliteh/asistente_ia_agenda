@@ -4,7 +4,6 @@ Implementa funciones para analizar consultas, generar SQL y evaluar resultados.
 """
 
 import json
-import os
 import sqlite3
 from typing import Dict, List, Any, Optional
 import google.generativeai as genai
@@ -17,13 +16,6 @@ from config import (
     MAX_RESULTS_DISPLAY
 )
 from helpers.llm_utils import llamar_llm, parsear_respuesta_json
-from helpers.cache_manager import SmartLLMCache
-
-# Crear una instancia global del caché
-llm_cache = SmartLLMCache(max_size=200)
-
-# Intentar cargar el caché desde disco al iniciar
-llm_cache.load_from_disk()
 
 # Configurar API
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -112,6 +104,46 @@ def analizar_consulta(consulta: str, contexto: Optional[Dict[str, Any]] = None, 
 
     {db_info}
 
+    MAPEO DE CONCEPTOS A CAMPOS DE LA BASE DE DATOS:
+
+    1. ROLES Y FUNCIONES:
+       - "docentes", "maestros", "profesores" → función_específica = 'DOCENTE FRENTE A GRUPO'
+       - "directores" → función_específica = 'DIRECTOR'
+       - "subdirectores académicos" → función_específica = 'SUBDIRECTOR ACADÉMICO'
+       - "subdirectores de gestión" → función_específica = 'SUBDIRECTOR DE GESTIÓN'
+       - "subdirectores" (genérico) → función_específica IN ('SUBDIRECTOR ACADÉMICO', 'SUBDIRECTOR DE GESTIÓN')
+       - "personal de aula de medios", "encargados de tecnología" → función_específica = 'TICAD'S (AULA DE MEDIOS)'
+       - "veladores", "personal de vigilancia" → función_específica = 'VELADOR'
+       - "ASPE", "personal de apoyo" → función_específica = 'ASPE'
+       - "a qué se dedica", "función", "cargo", "puesto" → función_específica
+
+    2. DATOS DE CONTACTO:
+       - "teléfono", "número", "celular", "móvil" → teléfono_celular, teléfono_particular
+       - "correo", "email", "correo electrónico" → dirección_de_correo_electrónica
+       - "dirección", "domicilio", "dónde vive" → domicilio_particular
+
+    3. DATOS LABORALES:
+       - "centro de trabajo", "escuela", "dónde trabaja" → nombre_del_c_t
+       - "clave del centro de trabajo" → clave_de_c_t_en_el_que_labora
+       - "doble plaza" → el_trabajador_cuenta_con_doble_plaza
+       - "fecha de ingreso", "antigüedad", "cuándo empezó" → fecha_ingreso_a_la_sep
+       - "sector" → sector
+       - "zona" → zona
+
+    4. DATOS ACADÉMICOS:
+       - "estudios", "formación", "preparación" → último_grado_de_estudios
+
+    5. DATOS PERSONALES:
+       - "estado civil", "casado", "soltero" → estado_civil
+       - "CURP" → curp
+       - "RFC" → filiación_o_rfc_con_homonimia
+
+    IMPORTANTE:
+    - NO confundas "docentes" con directores o subdirectores. Son roles diferentes.
+    - El campo j_jefe_de_sector_s_supervisor_d_director_sd_subdirector indica el rol administrativo (D=Director, SD=Subdirector), pero NO indica si alguien es docente.
+    - Cuando el usuario pregunte por "docentes" o "maestros", SIEMPRE busca en función_específica = 'DOCENTE FRENTE A GRUPO'
+    - Analiza cuidadosamente la consulta del usuario y determina qué campos de la base de datos son relevantes según este mapeo.
+
     Proporciona un análisis detallado siguiendo estos pasos:
 
     1. ¿Qué está preguntando el usuario exactamente?
@@ -154,7 +186,8 @@ def analizar_consulta(consulta: str, contexto: Optional[Dict[str, Any]] = None, 
           "valor": "valor1"
         }}
       ],
-      "explicacion": "Explicación de tu estrategia de búsqueda"
+      "explicacion": "Explicación de tu estrategia de búsqueda",
+      "clave_semantica": "tipo:entidad:atributo"
     }}
     ```
 
@@ -164,6 +197,10 @@ def analizar_consulta(consulta: str, contexto: Optional[Dict[str, Any]] = None, 
     - atributos_solicitados: Lista de atributos que se están solicitando (telefono, celular, correo_electronico, direccion, etc.)
     - condiciones: Lista de condiciones para filtrar resultados
     - explicacion: Explicación de tu estrategia de búsqueda
+    - clave_semantica: Una clave única que capture la esencia de la consulta, con el formato "tipo:entidad:atributo"
+      * Para consultas sobre personas: "persona:nombre_normalizado:atributo" (ej: "persona:luis_perez:telefono")
+      * Para listados: "listado:campo:valor" (ej: "listado:zona:109")
+      * Para conteos: "conteo:campo:valor" (ej: "conteo:funcion:directores")
 
     Responde SOLO con el JSON, sin texto adicional.
     """
@@ -219,8 +256,49 @@ def generar_sql_desde_estrategia(estrategia: Dict[str, Any], db_path: str = DB_P
 
     {db_info}
 
-    Genera una consulta SQL para buscar en la tabla 'contactos' con los siguientes campos:
-    - id, nombre, apellido_paterno, apellido_materno, nombre_completo, nombre_alternativo, telefono, celular, correo_electronico, direccion, funcion, centro_trabajo, zona, sector, estudios, estado_civil, fecha_ingreso, rfc, curp
+    Genera una consulta SQL para buscar en la tabla 'contactos' con los siguientes campos disponibles:
+    {', '.join(vista_previa.get('columnas', []))}
+
+    IMPORTANTE: Usa SOLO los campos que existen en la tabla. No inventes campos que no existen.
+
+    MAPEO DE CONCEPTOS A CAMPOS DE LA BASE DE DATOS:
+
+    1. ROLES Y FUNCIONES:
+       - "docentes", "maestros", "profesores" → función_específica = 'DOCENTE FRENTE A GRUPO'
+       - "directores" → función_específica = 'DIRECTOR'
+       - "subdirectores académicos" → función_específica = 'SUBDIRECTOR ACADÉMICO'
+       - "subdirectores de gestión" → función_específica = 'SUBDIRECTOR DE GESTIÓN'
+       - "subdirectores" (genérico) → función_específica IN ('SUBDIRECTOR ACADÉMICO', 'SUBDIRECTOR DE GESTIÓN')
+       - "personal de aula de medios", "encargados de tecnología" → función_específica = 'TICAD'S (AULA DE MEDIOS)'
+       - "veladores", "personal de vigilancia" → función_específica = 'VELADOR'
+       - "ASPE", "personal de apoyo" → función_específica = 'ASPE'
+       - "a qué se dedica", "función", "cargo", "puesto" → función_específica
+
+    2. DATOS DE CONTACTO:
+       - "teléfono", "número", "celular", "móvil" → teléfono_celular, teléfono_particular
+       - "correo", "email", "correo electrónico" → dirección_de_correo_electrónica
+       - "dirección", "domicilio", "dónde vive" → domicilio_particular
+
+    3. DATOS LABORALES:
+       - "centro de trabajo", "escuela", "dónde trabaja" → nombre_del_c_t
+       - "clave del centro de trabajo" → clave_de_c_t_en_el_que_labora
+       - "doble plaza" → el_trabajador_cuenta_con_doble_plaza
+       - "fecha de ingreso", "antigüedad", "cuándo empezó" → fecha_ingreso_a_la_sep
+       - "sector" → sector
+       - "zona" → zona
+
+    4. DATOS ACADÉMICOS:
+       - "estudios", "formación", "preparación" → último_grado_de_estudios
+
+    5. DATOS PERSONALES:
+       - "estado civil", "casado", "soltero" → estado_civil
+       - "CURP" → curp
+       - "RFC" → filiación_o_rfc_con_homonimia
+
+    IMPORTANTE:
+    - NO uses el campo j_jefe_de_sector_s_supervisor_d_director_sd_subdirector para buscar docentes
+    - Usa el campo función_específica para determinar el rol específico de cada persona
+    - Cuando el usuario pregunte por "docentes" o "maestros", SIEMPRE busca en función_específica = 'DOCENTE FRENTE A GRUPO'
 
     IMPORTANTE SOBRE LA ESTRUCTURA DE NOMBRES:
     - En español, los nombres completos suelen tener la estructura: [Nombre(s)] [Apellido Paterno] [Apellido Materno]
@@ -230,14 +308,79 @@ def generar_sql_desde_estrategia(estrategia: Dict[str, Any], db_path: str = DB_P
     - Cuando el usuario busca "Pérez", debe encontrar a "PEREZ IBAÑEZ LUIS" porque "Pérez" es su apellido paterno
     - La búsqueda debe ser inteligente y considerar todas estas posibilidades
 
-    Tu consulta SQL debe:
-    1. Manejar posibles variaciones o errores en los nombres
-    2. Priorizar coincidencias exactas pero también considerar coincidencias parciales
-    3. Incluir solo los campos relevantes para la consulta
-    4. Ordenar los resultados por relevancia
-    5. Usar un sistema de puntuación (CASE WHEN) para clasificar la relevancia de los resultados
-    6. Si solo hay una persona que coincide con el nombre parcial en la base de datos, optimiza la consulta para encontrar específicamente a esa persona
-    7. Buscar en todos los campos relacionados con nombres (nombre, apellido_paterno, apellido_materno, nombre_completo, nombre_alternativo)
+    INSTRUCCIONES PARA GENERAR CONSULTAS SQL FLEXIBLES:
+    1. Para búsquedas de nombres específicos, usa combinaciones de condiciones que aseguren que se trata de la misma persona
+       - MAL: WHERE nombre_s LIKE '%LUIS%' OR apellido_paterno LIKE '%PEREZ%' (demasiado amplio)
+       - BIEN: WHERE (nombre_s LIKE '%LUIS%' AND apellido_paterno LIKE '%PEREZ%') OR nombre_completo LIKE '%LUIS%PEREZ%'
+
+    2. SIEMPRE usa LIKE con comodines (%término%) en lugar de igualdad exacta (=) para todos los campos de texto
+       - MAL: WHERE nombre_s = 'LUIS'
+       - BIEN: WHERE nombre_s LIKE '%LUIS%'
+
+    3. SIEMPRE busca en TODOS los campos relacionados con el tipo de información solicitada
+       - Para nombres: nombre_s, apellido_paterno, apellido_materno, nombre_completo, nombre_alternativo
+       - Para teléfonos: teléfono_particular Y teléfono_celular (ambos campos)
+       - Para correos: dirección_de_correo_electrónico
+
+    4. SIEMPRE usa un sistema de puntuación (CASE WHEN) para clasificar la relevancia de los resultados
+       - Asigna puntuaciones más altas a coincidencias más exactas
+       - Ordena los resultados por esta puntuación (ORDER BY relevancia DESC)
+
+    5. Para consultas de información específica (como teléfonos), selecciona TODOS los campos relevantes
+       - Si buscan teléfono, incluye TANTO telefono COMO celular en el SELECT
+
+    6. Para búsquedas por nombre, considera posibles variaciones en el orden
+       - Busca "LUIS PEREZ" y también "PEREZ LUIS"
+       - Usa LIKE '%LUIS%PEREZ%' y también LIKE '%PEREZ%LUIS%'
+
+    EJEMPLOS DE CONSULTAS SQL FLEXIBLES:
+
+    1. Para buscar el teléfono de Luis Pérez:
+    ```sql
+    SELECT id, nombre_s, apellido_paterno, apellido_materno, nombre_completo, teléfono_particular, teléfono_celular,
+    CASE
+        WHEN nombre_completo LIKE '%LUIS%PEREZ%' THEN 100
+        WHEN nombre_completo LIKE '%PEREZ%LUIS%' THEN 90
+        WHEN nombre_s LIKE '%LUIS%' AND apellido_paterno LIKE '%PEREZ%' THEN 80
+        WHEN nombre_s LIKE '%LUIS%' AND apellido_paterno LIKE '%PEREZ%' THEN 70
+        ELSE 0
+    END AS relevancia
+    FROM contactos
+    WHERE
+        nombre_completo LIKE '%LUIS%PEREZ%' OR
+        nombre_completo LIKE '%PEREZ%LUIS%' OR
+        (nombre_s LIKE '%LUIS%' AND apellido_paterno LIKE '%PEREZ%')
+    ORDER BY relevancia DESC
+    LIMIT 10
+    ```
+
+    2. Para listar todos los docentes de la zona 109:
+    ```sql
+    SELECT id, nombre_completo, función_específica, nombre_del_c_t, zona
+    FROM contactos
+    WHERE
+        función_específica = 'DOCENTE FRENTE A GRUPO'
+        AND zona = '109'
+    ORDER BY nombre_completo
+    ```
+
+    3. Para buscar directores:
+    ```sql
+    SELECT id, nombre_completo, función_específica, nombre_del_c_t, zona
+    FROM contactos
+    WHERE
+        j_jefe_de_sector_s_supervisor_d_director_sd_subdirector = 'D'
+    ORDER BY nombre_completo
+    ```
+
+    4. Para buscar subdirectores:
+    ```sql
+    SELECT id, nombre_completo, función_específica, nombre_del_c_t, zona
+    FROM contactos
+    WHERE
+        j_jefe_de_sector_s_supervisor_d_director_sd_subdirector = 'SD'
+    ORDER BY nombre_completo
+    ```
 
     IMPORTANTE PARA CONSULTAS DE LISTADO:
     - Si la estrategia indica que es una consulta de tipo "listado", asegúrate de que la consulta SQL pueda recuperar TODOS los registros solicitados.
@@ -245,7 +388,9 @@ def generar_sql_desde_estrategia(estrategia: Dict[str, Any], db_path: str = DB_P
     - Para consultas que piden "todos los X", NUNCA uses LIMIT, ya que necesitamos recuperar todos los registros.
     - Ordena los resultados de manera lógica según el tipo de consulta (por nombre_completo para listas de personas, por función para listas de roles, etc.).
     - Para consultas que piden múltiples registros, asegúrate de seleccionar solo los campos necesarios para mejorar el rendimiento.
-    - Si la consulta es del tipo "muestra todos los docentes de la zona 109", asegúrate de incluir las condiciones correctas (función = 'DOCENTE' AND zona = '109').
+    - Si la consulta es del tipo "muestra todos los docentes de la zona 109", asegúrate de incluir las condiciones correctas (función_específica = 'DOCENTE FRENTE A GRUPO' AND zona = '109').
+    - Si la consulta es del tipo "muestra todos los directores de la zona 109", usa (j_jefe_de_sector_s_supervisor_d_director_sd_subdirector = 'D' AND zona = '109').
+    - Si la consulta es del tipo "muestra todos los subdirectores de la zona 109", usa (j_jefe_de_sector_s_supervisor_d_director_sd_subdirector = 'SD' AND zona = '109').
 
     Formato de respuesta (solo JSON, sin texto adicional):
 
@@ -439,12 +584,52 @@ def evaluar_resultados(consulta_original: str, resultados: Dict[str, Any], estra
     - Cuando el usuario busca "Luis", debe encontrar a "PEREZ IBAÑEZ LUIS" porque "Luis" es su nombre
     - Cuando el usuario busca "Pérez", debe encontrar a "PEREZ IBAÑEZ LUIS" porque "Pérez" es su apellido paterno
 
+    MAPEO DE CONCEPTOS A CAMPOS DE LA BASE DE DATOS:
+
+    1. ROLES Y FUNCIONES:
+       - "docentes", "maestros", "profesores" → función_específica = 'DOCENTE FRENTE A GRUPO'
+       - "directores" → función_específica = 'DIRECTOR'
+       - "subdirectores académicos" → función_específica = 'SUBDIRECTOR ACADÉMICO'
+       - "subdirectores de gestión" → función_específica = 'SUBDIRECTOR DE GESTIÓN'
+       - "subdirectores" (genérico) → función_específica IN ('SUBDIRECTOR ACADÉMICO', 'SUBDIRECTOR DE GESTIÓN')
+       - "personal de aula de medios", "encargados de tecnología" → función_específica = 'TICAD'S (AULA DE MEDIOS)'
+       - "veladores", "personal de vigilancia" → función_específica = 'VELADOR'
+       - "ASPE", "personal de apoyo" → función_específica = 'ASPE'
+
+    IMPORTANTE SOBRE ROLES EDUCATIVOS:
+    - Si la consulta era sobre "docentes" o "maestros" pero los resultados NO muestran personas con función_específica = "DOCENTE FRENTE A GRUPO", la búsqueda NO es correcta
+    - Si la consulta era sobre "directores" pero los resultados NO muestran personas con función_específica = "DIRECTOR", la búsqueda NO es correcta
+    - Si la consulta era sobre "subdirectores" pero los resultados NO muestran personas con función_específica = "SUBDIRECTOR ACADÉMICO" o "SUBDIRECTOR DE GESTIÓN", la búsqueda NO es correcta
+    - Verifica que los campos utilizados en la búsqueda correspondan correctamente a los conceptos mencionados en la consulta
+
     Evalúa estos resultados:
     1. ¿Son relevantes para la consulta original?
     2. ¿Hay demasiados resultados o muy pocos?
     3. ¿Se encontró la información específica que se buscaba?
     4. ¿Los resultados son precisos y completos?
     5. ¿Se interpretó correctamente el nombre mencionado en la consulta?
+
+    IMPORTANTE PARA RESULTADOS VACÍOS:
+    Si no se encontraron resultados (total = 0), DEBES proporcionar una estrategia alternativa detallada:
+
+    1. Para búsquedas de nombres:
+       - Si el usuario buscó un nombre completo (como "Luis Pérez"), sugiere buscar solo por el nombre o solo por el apellido
+       - Si el usuario buscó solo un nombre (como "Luis"), sugiere buscar variantes como "Luís", "Luiz", etc.
+       - Sugiere buscar en otros campos como nombre_alternativo
+       - Proporciona una nueva estrategia con condiciones de búsqueda más flexibles
+
+    2. Para búsquedas de teléfonos/contactos:
+       - Si el usuario buscó el teléfono de alguien, asegúrate de que la estrategia busque tanto en el campo "telefono" como en "celular"
+       - Sugiere buscar variantes del nombre de la persona
+       - Proporciona una nueva estrategia que busque en ambos campos de teléfono
+
+    3. Para búsquedas por función o cargo:
+       - Si el usuario buscó por una función específica (como "director"), sugiere buscar variantes como "directora", "dirección", etc.
+       - Proporciona una nueva estrategia con términos de búsqueda más amplios
+
+    4. Para búsquedas por zona o ubicación:
+       - Si el usuario buscó por una zona específica, sugiere verificar si el formato de la zona es correcto
+       - Proporciona una nueva estrategia con búsqueda más flexible para la zona
 
     IMPORTANTE:
     - Si no se encontraron resultados pero hay nombres similares en la base de datos, sugiere buscar esos nombres.
@@ -461,7 +646,7 @@ def evaluar_resultados(consulta_original: str, resultados: Dict[str, Any], estra
     - Si la consulta parece ser una aclaración o refinamiento de una consulta anterior, prioriza la precisión y completitud en la respuesta.
     - Si el usuario ha hecho varias consultas sobre el mismo tema, sugiere proporcionar una respuesta más detallada y completa.
 
-    Si los resultados no son satisfactorios, sugiere cómo refinar la búsqueda.
+    Si los resultados no son satisfactorios, DEBES proporcionar una nueva estrategia de búsqueda completa y detallada.
 
     Formato de respuesta (solo JSON, sin texto adicional):
 
@@ -472,7 +657,17 @@ def evaluar_resultados(consulta_original: str, resultados: Dict[str, Any], estra
       "refinamiento": {{
         "sugerencia": "Sugerencia para refinar la búsqueda",
         "nueva_estrategia": {{
-          // Nueva estrategia de búsqueda si es necesario
+          "tipo_consulta": "informacion | filtrado | conteo",
+          "nombres_posibles": ["nombre1", "nombre2", ...],
+          "atributos_solicitados": ["atributo1", "atributo2", ...],
+          "condiciones": [
+            {{
+              "campo": "campo1",
+              "operador": "LIKE",
+              "valor": "valor1"
+            }}
+          ],
+          "explicacion": "Explicación de la nueva estrategia de búsqueda"
         }}
       }}
     }}
@@ -535,9 +730,31 @@ def generar_respuesta_desde_resultados(consulta_original: str, resultados: Dict[
             Respuesta: "{respuesta}"
             """
 
+    # Filtrar resultados para mostrar solo los más relevantes
+    # y limitar el número para evitar tokens excesivos
+    resultados_filtrados = []
+
+    # Si es una consulta de información sobre una persona específica
+    if estrategia.get("tipo_consulta") == "informacion" and estrategia.get("nombres_posibles") and len(estrategia.get("nombres_posibles", [])) > 0:
+        # Ordenar por relevancia si existe ese campo
+        if resultados["registros"] and "relevancia" in resultados["registros"][0]:
+            resultados_ordenados = sorted(resultados["registros"], key=lambda x: x.get("relevancia", 0), reverse=True)
+        else:
+            resultados_ordenados = resultados["registros"]
+
+        # Filtrar solo los resultados con alta relevancia (si hay campo de relevancia)
+        if resultados_ordenados and "relevancia" in resultados_ordenados[0]:
+            max_relevancia = resultados_ordenados[0].get("relevancia", 0)
+            # Solo incluir resultados con al menos 80% de la relevancia máxima
+            resultados_filtrados = [r for r in resultados_ordenados if r.get("relevancia", 0) >= max_relevancia * 0.8]
+        else:
+            resultados_filtrados = resultados_ordenados
+    else:
+        # Para otros tipos de consultas, usar todos los resultados
+        resultados_filtrados = resultados["registros"]
+
     # Limitar el número de resultados para evitar tokens excesivos
-    # pero asegurarnos de que el modelo sepa cuántos hay en total
-    resultados_limitados = resultados["registros"][:MAX_RESULTS_DISPLAY] if len(resultados["registros"]) > MAX_RESULTS_DISPLAY else resultados["registros"]
+    resultados_limitados = resultados_filtrados[:MAX_RESULTS_DISPLAY] if len(resultados_filtrados) > MAX_RESULTS_DISPLAY else resultados_filtrados
 
     prompt = f"""
     Eres un asistente de agenda personal que mantiene una conversación continua con el usuario.
@@ -566,6 +783,45 @@ def generar_respuesta_desde_resultados(consulta_original: str, resultados: Dict[
     - Cuando el usuario busca "Pérez", debe encontrar a "PEREZ IBAÑEZ LUIS" porque "Pérez" es su apellido paterno
     - Al responder, usa el formato natural de nombres ([Nombre(s)] [Apellido Paterno] [Apellido Materno])
 
+    MAPEO DE CONCEPTOS A CAMPOS DE LA BASE DE DATOS:
+
+    1. ROLES Y FUNCIONES:
+       - "docentes", "maestros", "profesores" → función_específica = 'DOCENTE FRENTE A GRUPO'
+       - "directores" → función_específica = 'DIRECTOR'
+       - "subdirectores académicos" → función_específica = 'SUBDIRECTOR ACADÉMICO'
+       - "subdirectores de gestión" → función_específica = 'SUBDIRECTOR DE GESTIÓN'
+       - "subdirectores" (genérico) → función_específica IN ('SUBDIRECTOR ACADÉMICO', 'SUBDIRECTOR DE GESTIÓN')
+       - "personal de aula de medios", "encargados de tecnología" → función_específica = 'TICAD'S (AULA DE MEDIOS)'
+       - "veladores", "personal de vigilancia" → función_específica = 'VELADOR'
+       - "ASPE", "personal de apoyo" → función_específica = 'ASPE'
+       - "a qué se dedica", "función", "cargo", "puesto" → función_específica
+
+    2. DATOS DE CONTACTO:
+       - "teléfono", "número", "celular", "móvil" → teléfono_celular, teléfono_particular
+       - "correo", "email", "correo electrónico" → dirección_de_correo_electrónica
+       - "dirección", "domicilio", "dónde vive" → domicilio_particular
+
+    3. DATOS LABORALES:
+       - "centro de trabajo", "escuela", "dónde trabaja" → nombre_del_c_t
+       - "clave del centro de trabajo" → clave_de_c_t_en_el_que_labora
+       - "doble plaza" → el_trabajador_cuenta_con_doble_plaza
+       - "fecha de ingreso", "antigüedad", "cuándo empezó" → fecha_ingreso_a_la_sep
+       - "sector" → sector
+       - "zona" → zona
+
+    4. DATOS ACADÉMICOS:
+       - "estudios", "formación", "preparación" → último_grado_de_estudios
+
+    5. DATOS PERSONALES:
+       - "estado civil", "casado", "soltero" → estado_civil
+       - "CURP" → curp
+       - "RFC" → filiación_o_rfc_con_homonimia
+
+    IMPORTANTE SOBRE ROLES EDUCATIVOS:
+    - Si la consulta era sobre "docentes" o "maestros", asegúrate de mostrar SOLO personas con función_específica = "DOCENTE FRENTE A GRUPO"
+    - Si la consulta era sobre "directores", asegúrate de mostrar SOLO personas con función_específica = "DIRECTOR"
+    - Si la consulta era sobre "subdirectores", asegúrate de mostrar SOLO personas con función_específica = "SUBDIRECTOR ACADÉMICO" o "SUBDIRECTOR DE GESTIÓN"
+
     INSTRUCCIONES:
 
     1. Responde basándote en los RESULTADOS OBTENIDOS Y EN EL CONTEXTO ANTERIOR si es relevante.
@@ -573,6 +829,9 @@ def generar_respuesta_desde_resultados(consulta_original: str, resultados: Dict[
     3. Mantén un tono amable, servicial y ligeramente informal.
     4. Si no hay resultados relevantes en la consulta actual PERO la información aparece en respuestas anteriores, USA ESA INFORMACIÓN.
     5. Si hay múltiples resultados, SOLO MUESTRA LOS MÁS RELEVANTES para la consulta.
+       - Si el usuario pregunta por una persona específica (ej: "teléfono de Luis Pérez"), SOLO muestra información de esa persona exacta.
+       - NUNCA incluyas información de otras personas que solo coincidan parcialmente con el nombre (ej: si buscan "Luis Pérez", no incluyas a "Claudia Pérez").
+       - Solo menciona otras personas si hay ambigüedad real (ej: hay dos "Luis Pérez" diferentes) o si el usuario explícitamente pide listar varias personas.
     6. NO uses fórmulas repetitivas como "Según los datos..." o "La información indica...".
     7. NO preguntes "¿Necesitas algo más?" o "¿Te puedo ayudar con algo más?".
     8. Si la evaluación indica que los resultados no son satisfactorios, busca en el contexto anterior si ya proporcionaste esa información.
@@ -608,19 +867,19 @@ def generar_respuesta_desde_resultados(consulta_original: str, resultados: Dict[
     safety_settings = [
         {
             "category": "HARM_CATEGORY_HARASSMENT",
-            "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            "threshold": "BLOCK_ONLY_HIGH"
         },
         {
             "category": "HARM_CATEGORY_HATE_SPEECH",
-            "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            "threshold": "BLOCK_ONLY_HIGH"
         },
         {
             "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            "threshold": "BLOCK_ONLY_HIGH"
         },
         {
             "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-            "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            "threshold": "BLOCK_ONLY_HIGH"
         }
     ]
 
@@ -641,9 +900,9 @@ def generar_respuesta_desde_resultados(consulta_original: str, resultados: Dict[
 
     return texto_limpio
 
-def procesar_consulta_completa(consulta: str, contexto: Optional[Dict[str, Any]] = None, db_path: str = DB_PATH, debug: bool = False) -> Dict[str, Any]:
+def procesar_consulta_completa(consulta: str, contexto: Optional[Dict[str, Any]] = None, db_path: str = DB_PATH, debug: bool = False, max_refinamientos: int = 1) -> Dict[str, Any]:
     """
-    Procesa una consulta completa utilizando el flujo de 5 pasos.
+    Procesa una consulta completa utilizando el flujo de 5 pasos con refinamiento automático.
 
     Esta función centraliza todo el proceso de consulta, desde el análisis inicial
     hasta la generación de la respuesta final, siguiendo el flujo de 5 pasos:
@@ -653,123 +912,22 @@ def procesar_consulta_completa(consulta: str, contexto: Optional[Dict[str, Any]]
     4. Evaluar resultados
     5. Generar respuesta
 
+    Si no se encuentran resultados, la función intentará automáticamente refinar la búsqueda
+    utilizando estrategias alternativas sugeridas por la evaluación.
+
     Args:
         consulta (str): Consulta del usuario en lenguaje natural
         contexto (dict, optional): Contexto de la conversación anterior
         db_path (str): Ruta a la base de datos SQLite
         debug (bool): Activar modo de depuración para mostrar información detallada
+        max_refinamientos (int): Número máximo de refinamientos automáticos a intentar
 
     Returns:
         dict: Resultado completo del procesamiento con todos los pasos intermedios
     """
-    # Verificar que la base de datos existe
-    if not os.path.exists(db_path):
-        return {
-            "error": f"La base de datos no existe en {db_path}.",
-            "respuesta": "Lo siento, no puedo acceder a la base de datos en este momento."
-        }
+    # Usar la implementación modular en consulta_processor.py
+    from helpers.consulta_processor import procesar_consulta
 
-    # Paso 1: Analizar la consulta y generar una estrategia de búsqueda
-    if debug:
-        print(f"DEBUG: Analizando consulta: {consulta}")
+    # Llamar a la función de procesamiento (sin caché tradicional)
+    return procesar_consulta(consulta, contexto, db_path, debug, max_refinamientos)
 
-    estrategia = analizar_consulta(consulta, contexto, db_path)
-
-    if debug:
-        print("DEBUG: Estrategia de búsqueda:")
-        print(json.dumps(estrategia, indent=2, ensure_ascii=False))
-
-    # Verificar si hubo un error en el análisis
-    if "error" in estrategia:
-        return {
-            "error": f"Error al analizar la consulta: {estrategia['error']}",
-            "respuesta": "Lo siento, no pude entender bien tu consulta. ¿Podrías reformularla?"
-        }
-
-    # Verificar si hay un resultado en caché para esta estrategia
-    cached_result = llm_cache.get(estrategia)
-    if cached_result:
-        if debug:
-            print("DEBUG: ¡Resultado encontrado en caché!")
-            print(f"DEBUG: Estadísticas del caché: {llm_cache.get_stats()}")
-        return cached_result
-
-    if debug:
-        print("DEBUG: No se encontró en caché, procesando consulta completa...")
-
-    # Paso 2: Generar consulta SQL a partir de la estrategia
-    if debug:
-        print("DEBUG: Generando consulta SQL...")
-
-    consulta_sql = generar_sql_desde_estrategia(estrategia, db_path)
-
-    if debug:
-        print("DEBUG: Consulta SQL generada:")
-        print(consulta_sql.get("consulta", "Error: No se generó consulta SQL"))
-        if consulta_sql.get("parametros"):
-            print("DEBUG: Parámetros SQL:")
-            print(consulta_sql["parametros"])
-
-    # Verificar si hubo un error en la generación de SQL
-    if "error" in consulta_sql:
-        return {
-            "error": f"Error al generar SQL: {consulta_sql['error']}",
-            "respuesta": "Lo siento, tuve un problema al procesar tu consulta. ¿Podrías intentar con una consulta más simple?"
-        }
-
-    # Paso 3: Ejecutar consulta SQL
-    if debug:
-        print("DEBUG: Ejecutando consulta SQL...")
-
-    resultado_sql = ejecutar_consulta_llm(consulta_sql["consulta"], consulta_sql["parametros"], db_path)
-
-    if debug:
-        print("DEBUG: Resultados SQL:")
-        print(f"Total: {resultado_sql['total']} registros")
-        if resultado_sql["total"] > 0 and resultado_sql["total"] <= 3:
-            print(json.dumps(resultado_sql["registros"], indent=2, ensure_ascii=False))
-        elif resultado_sql["total"] > 3:
-            print(json.dumps(resultado_sql["registros"][:3], indent=2, ensure_ascii=False))
-            print(f"... y {resultado_sql['total'] - 3} más")
-
-    # Verificar si hubo un error en la ejecución
-    if resultado_sql.get("error"):
-        return {
-            "error": f"Error al ejecutar SQL: {resultado_sql['error']}",
-            "respuesta": "Lo siento, ocurrió un error al buscar en la base de datos. Por favor, intenta con otra consulta."
-        }
-
-    # Paso 4: Evaluar resultados
-    if debug:
-        print("DEBUG: Evaluando resultados...")
-
-    evaluacion = evaluar_resultados(consulta, resultado_sql, estrategia, db_path)
-
-    if debug:
-        print("DEBUG: Evaluación de resultados:")
-        print(json.dumps(evaluacion, indent=2, ensure_ascii=False))
-
-    # Paso 5: Generar respuesta natural
-    if debug:
-        print("DEBUG: Generando respuesta natural...")
-
-    respuesta = generar_respuesta_desde_resultados(consulta, resultado_sql, estrategia, evaluacion, db_path)
-
-    # Construir el resultado completo
-    resultado = {
-        "consulta": consulta,
-        "estrategia": estrategia,
-        "consulta_sql": consulta_sql,
-        "resultado_sql": resultado_sql,
-        "evaluacion": evaluacion,
-        "respuesta": respuesta,
-        "error": resultado_sql.get("error")
-    }
-
-    # Guardar en caché
-    llm_cache.set(estrategia, resultado)
-
-    if debug:
-        print(f"DEBUG: Resultado guardado en caché. Estadísticas: {llm_cache.get_stats()}")
-
-    return resultado

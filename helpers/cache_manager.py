@@ -7,12 +7,11 @@ Este módulo proporciona una clase para almacenar y recuperar resultados
 de consultas basándose en la estrategia generada por el LLM.
 """
 
-import json
-import os
 import time
 from typing import Dict, Any, Optional
+from helpers.base_cache import BaseCache
 
-class SmartLLMCache:
+class SmartLLMCache(BaseCache):
     """
     Caché inteligente que utiliza la estrategia generada por el LLM
     para identificar consultas similares y reutilizar resultados.
@@ -26,12 +25,7 @@ class SmartLLMCache:
             max_size (int): Tamaño máximo del caché
             cache_file (str): Ruta al archivo para persistir el caché
         """
-        self.cache = {}
-        self.max_size = max_size
-        self.cache_file = cache_file
-        self.hits = 0
-        self.misses = 0
-        self.last_save_time = time.time()
+        super().__init__(max_size, cache_file)
 
     def get_cache_key_from_strategy(self, estrategia: Dict[str, Any]) -> str:
         """
@@ -43,39 +37,75 @@ class SmartLLMCache:
         Returns:
             str: Clave única para el caché
         """
+        # Importar logger si está disponible
+        try:
+            from helpers.logger import Logger
+            logger = Logger.get_logger()
+            log_available = True
+        except (ImportError, AttributeError):
+            log_available = False
+
         # Extraer tipo de consulta y normalizarlo
-        tipo_consulta = estrategia.get("tipo_consulta", "general").lower().strip()
+        tipo_consulta_original = estrategia.get("tipo_consulta", "general")
+        tipo_consulta = tipo_consulta_original.lower().strip()
+
+        if log_available:
+            logger.debug(f"Generando clave de caché. Tipo de consulta original: '{tipo_consulta_original}'")
 
         # Normalizar tipos de consulta similares
+        tipo_consulta_normalizado = tipo_consulta
         if tipo_consulta in ["informacion", "información", "info"]:
-            tipo_consulta = "informacion"
+            tipo_consulta_normalizado = "informacion"
         elif tipo_consulta in ["listado", "lista", "listar"]:
-            tipo_consulta = "listado"
+            tipo_consulta_normalizado = "listado"
         elif tipo_consulta in ["filtrado", "filtrar", "buscar"]:
-            tipo_consulta = "filtrado"
+            tipo_consulta_normalizado = "filtrado"
         elif tipo_consulta in ["conteo", "contar", "cuantos", "cuántos"]:
-            tipo_consulta = "conteo"
+            tipo_consulta_normalizado = "conteo"
+
+        if log_available and tipo_consulta != tipo_consulta_normalizado:
+            logger.debug(f"Tipo de consulta normalizado: '{tipo_consulta}' -> '{tipo_consulta_normalizado}'")
+
+        tipo_consulta = tipo_consulta_normalizado
 
         # Extraer nombres mencionados y normalizarlos
         nombres = []
         if "nombres_posibles" in estrategia and estrategia["nombres_posibles"]:
+            if log_available:
+                logger.debug(f"Nombres originales: {estrategia['nombres_posibles']}")
+
             # Normalizar nombres (quitar acentos, convertir a mayúsculas, eliminar espacios extra)
             nombres_normalizados = []
             for nombre in estrategia["nombres_posibles"]:
                 if nombre:
                     # Normalizar nombre
                     nombre_norm = nombre.upper().strip()
+                    nombre_original = nombre_norm  # Guardar para logging
+
                     # Quitar caracteres especiales y acentos comunes en español
                     for original, reemplazo in [
                         ('Á', 'A'), ('É', 'E'), ('Í', 'I'), ('Ó', 'O'), ('Ú', 'U'),
                         ('Ñ', 'N'), ('.', ''), (',', ''), (';', ''), (':', '')
                     ]:
                         nombre_norm = nombre_norm.replace(original, reemplazo)
+
                     nombres_normalizados.append(nombre_norm)
+
+                    if log_available and nombre_original != nombre_norm:
+                        logger.debug(f"Nombre normalizado: '{nombre_original}' -> '{nombre_norm}'")
 
             nombres = sorted(nombres_normalizados)
 
+            if log_available:
+                logger.debug(f"Nombres normalizados y ordenados: {nombres}")
+        else:
+            if log_available:
+                logger.debug("No se encontraron nombres en la estrategia")
+
         nombres_str = "|".join(nombres)
+
+        if log_available:
+            logger.debug(f"String de nombres para clave: '{nombres_str}'")
 
         # Extraer atributos solicitados y normalizarlos
         atributos = []
@@ -109,39 +139,76 @@ class SmartLLMCache:
         # Para consultas de información sobre una persona específica,
         # ignoramos las condiciones y usamos solo el tipo, nombres y atributos
         if tipo_consulta == "informacion" and nombres_str:
+            if log_available:
+                logger.debug("Generando clave para consulta de información personal")
+
             # Construir la clave simplificada para consultas de información
             key_parts = [tipo_consulta]
             key_parts.append(f"nombres={nombres_str}")
             if atributos_str:
                 key_parts.append(f"atributos={atributos_str}")
-            return ":".join(key_parts)
+
+            final_key = ":".join(key_parts)
+
+            if log_available:
+                logger.debug(f"Clave de caché generada: '{final_key}'")
+
+            return final_key
 
         # Para otros tipos de consultas, incluimos las condiciones
         condiciones = []
         if "condiciones" in estrategia and estrategia["condiciones"]:
+            if log_available:
+                logger.debug(f"Condiciones originales: {estrategia['condiciones']}")
+
             for cond in estrategia["condiciones"]:
                 if isinstance(cond, dict):
-                    campo = cond.get("campo", "").lower().strip()
-                    valor = str(cond.get("valor", "")).lower().strip()
+                    campo_original = cond.get("campo", "")
+                    campo = campo_original.lower().strip() if campo_original else ""
+
+                    valor_original = cond.get("valor", "")
+                    valor = str(valor_original).lower().strip() if valor_original else ""
+
+                    if log_available:
+                        logger.debug(f"Procesando condición: campo='{campo}', valor='{valor}'")
 
                     # Normalizar campos
+                    campo_normalizado = campo
                     if campo in ["zona", "área", "area", "sector"]:
-                        campo = "zona"
+                        campo_normalizado = "zona"
                     elif campo in ["funcion", "función", "puesto", "cargo", "rol"]:
-                        campo = "funcion"
+                        campo_normalizado = "funcion"
                     elif campo in ["estado_civil", "estado civil", "civil"]:
-                        campo = "estado_civil"
+                        campo_normalizado = "estado_civil"
+
+                    if log_available and campo != campo_normalizado:
+                        logger.debug(f"Campo normalizado: '{campo}' -> '{campo_normalizado}'")
+
+                    campo = campo_normalizado
 
                     # Normalizar valores
+                    valor_normalizado = valor
                     if campo == "estado_civil" and valor in ["casado", "casada", "matrimonio"]:
-                        valor = "casado"
+                        valor_normalizado = "casado"
                     elif campo == "estado_civil" and valor in ["soltero", "soltera"]:
-                        valor = "soltero"
+                        valor_normalizado = "soltero"
+
+                    if log_available and valor != valor_normalizado:
+                        logger.debug(f"Valor normalizado: '{valor}' -> '{valor_normalizado}'")
+
+                    valor = valor_normalizado
 
                     if campo and valor:
-                        condiciones.append(f"{campo}:{valor}")
+                        condicion_str = f"{campo}:{valor}"
+                        condiciones.append(condicion_str)
+
+                        if log_available:
+                            logger.debug(f"Condición añadida: '{condicion_str}'")
 
         condiciones_str = "|".join(sorted(condiciones))
+
+        if log_available:
+            logger.debug(f"String de condiciones para clave: '{condiciones_str}'")
 
         # Construir la clave
         key_parts = [tipo_consulta]
@@ -152,7 +219,12 @@ class SmartLLMCache:
         if condiciones_str:
             key_parts.append(f"condiciones={condiciones_str}")
 
-        return ":".join(key_parts)
+        final_key = ":".join(key_parts)
+
+        if log_available:
+            logger.debug(f"Clave de caché generada: '{final_key}'")
+
+        return final_key
 
     def get(self, estrategia: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -208,100 +280,67 @@ class SmartLLMCache:
 
         print(f"DEBUG: Caché actualizado. Claves: {list(self.cache.keys())}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def _prepare_data_for_save(self) -> Dict[str, Any]:
         """
-        Obtiene estadísticas del caché.
+        Prepara los datos del caché para guardar en disco.
 
         Returns:
-            dict: Estadísticas del caché
+            dict: Datos preparados para guardar
         """
-        total = self.hits + self.misses
-        hit_rate = (self.hits / total) * 100 if total > 0 else 0
-
-        return {
-            "size": len(self.cache),
-            "max_size": self.max_size,
-            "hits": self.hits,
-            "misses": self.misses,
-            "hit_rate": f"{hit_rate:.2f}%"
-        }
-
-    def save_to_disk(self) -> bool:
-        """
-        Guarda el caché en disco.
-
-        Returns:
-            bool: True si se guardó correctamente, False en caso contrario
-        """
-        try:
-            # Asegurarse de que el directorio existe
-            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-
-            # Solo guardar las respuestas finales para ahorrar espacio
-            simplified_cache = {}
-            for key, value in self.cache.items():
-                simplified_cache[key] = {
-                    "respuesta": value["respuesta"],
-                    "resultado_sql": {
-                        "total": value["resultado_sql"]["total"],
-                        "registros": value["resultado_sql"]["registros"]
-                    }
+        # Solo guardar las respuestas finales para ahorrar espacio
+        simplified_cache = {}
+        for key, value in self.cache.items():
+            simplified_cache[key] = {
+                "respuesta": value["respuesta"],
+                "resultado_sql": {
+                    "total": value["resultado_sql"]["total"],
+                    "registros": value["resultado_sql"]["registros"]
                 }
-
-            # Guardar también metadatos del caché
-            cache_data = {
-                "metadata": {
-                    "version": "1.0",
-                    "timestamp": time.time(),
-                    "hits": self.hits,
-                    "misses": self.misses,
-                    "size": len(self.cache),
-                    "max_size": self.max_size
-                },
-                "cache": simplified_cache
             }
 
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        # Guardar también metadatos del caché
+        return {
+            "metadata": {
+                "version": "1.0",
+                "timestamp": time.time(),
+                "hits": self.hits,
+                "misses": self.misses,
+                "size": len(self.cache),
+                "max_size": self.max_size
+            },
+            "cache": simplified_cache
+        }
 
-            print(f"DEBUG: Caché guardado en disco: {self.cache_file}")
-            print(f"DEBUG: Claves guardadas: {list(simplified_cache.keys())}")
-
-            return True
-        except Exception as e:
-            print(f"Error al guardar el caché: {str(e)}")
-            return False
-
-    def load_from_disk(self) -> bool:
+    def _get_entry_timestamp(self, entry: Dict[str, Any]) -> Optional[float]:
         """
-        Carga el caché desde disco.
+        Obtiene el timestamp de una entrada del caché.
+
+        Args:
+            entry: Entrada del caché
 
         Returns:
-            bool: True si se cargó correctamente, False en caso contrario
+            float: Timestamp de la entrada o None si no tiene
         """
-        try:
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+        # Las entradas no tienen timestamp en este caché
+        return None
 
-                # Verificar si es el nuevo formato con metadatos
-                if isinstance(data, dict) and "cache" in data and "metadata" in data:
-                    self.cache = data["cache"]
-                    # Restaurar metadatos si están disponibles
-                    if "hits" in data["metadata"]:
-                        self.hits = data["metadata"]["hits"]
-                    if "misses" in data["metadata"]:
-                        self.misses = data["metadata"]["misses"]
-                else:
-                    # Formato antiguo (solo el caché)
-                    self.cache = data
+    def _process_loaded_data(self, data: Dict[str, Any]) -> None:
+        """
+        Procesa los datos cargados desde disco.
 
-                print(f"DEBUG: Caché cargado desde disco: {self.cache_file}")
-                print(f"DEBUG: Claves cargadas: {list(self.cache.keys())}")
-                return True
+        Args:
+            data (dict): Datos cargados desde disco
+        """
+        # Verificar si es el nuevo formato con metadatos
+        if isinstance(data, dict) and "cache" in data and "metadata" in data:
+            self.cache = data["cache"]
+            # Restaurar metadatos si están disponibles
+            if "hits" in data["metadata"]:
+                self.hits = data["metadata"]["hits"]
+            if "misses" in data["metadata"]:
+                self.misses = data["metadata"]["misses"]
+        else:
+            # Formato antiguo (solo el caché)
+            self.cache = data
 
-            print(f"DEBUG: Archivo de caché no encontrado: {self.cache_file}")
-            return False
-        except Exception as e:
-            print(f"Error al cargar el caché: {str(e)}")
-            return False
+        print(f"DEBUG: Claves cargadas: {list(self.cache.keys())}")

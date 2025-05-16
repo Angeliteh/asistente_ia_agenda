@@ -45,74 +45,87 @@ def crear_base_datos(registros: List[Dict[str, Any]]) -> Dict[str, Any]:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
-        # Crear tabla para los contactos
-        cursor.execute('''
+        # Obtener todos los campos únicos de los registros
+        campos_unicos = set()
+        for registro in registros:
+            campos_unicos.update(registro.keys())
+
+        # Asegurarse de que los campos básicos estén presentes
+        campos_basicos = ["id", "nombre_completo", "nombre_alternativo"]
+        for campo in campos_basicos:
+            if campo not in campos_unicos:
+                campos_unicos.add(campo)
+
+        # Crear la definición de la tabla dinámicamente
+        campos_sql = ["id INTEGER PRIMARY KEY"]
+        for campo in campos_unicos:
+            if campo != "id":  # id ya está definido
+                # Normalizar el nombre del campo para asegurar que sea válido en SQLite
+                campo_normalizado = campo
+
+                # Verificar si el campo contiene caracteres especiales
+                if any(char in campo for char in ["=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*", " ", ".", "(", ")"]):
+                    # Normalizar el campo
+                    campo_normalizado = campo.lower()
+                    # Reemplazar caracteres especiales
+                    for char in [" ", ".", "(", ")", "\n", "=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*"]:
+                        campo_normalizado = campo_normalizado.replace(char, "_")
+                    # Eliminar guiones bajos múltiples
+                    while "__" in campo_normalizado:
+                        campo_normalizado = campo_normalizado.replace("__", "_")
+                    # Eliminar guiones bajos al inicio y final
+                    campo_normalizado = campo_normalizado.strip("_")
+
+                # Determinar el tipo de datos
+                tipo = "TEXT"  # Por defecto, todo es texto
+                if campo in ["edad", "antiguedad"]:
+                    tipo = "INTEGER"
+
+                # Asegurarse de que el campo no esté vacío
+                if not campo_normalizado:
+                    campo_normalizado = f"campo_{len(campos_sql)}"
+
+                # Añadir comillas para evitar problemas con palabras reservadas
+                campos_sql.append(f'"{campo_normalizado}" {tipo}')
+
+        # Crear la tabla
+        cursor.execute(f'''
         CREATE TABLE contactos (
-            id INTEGER PRIMARY KEY,
-            nombre TEXT,
-            apellido_paterno TEXT,
-            apellido_materno TEXT,
-            nombre_completo TEXT,
-            nombre_alternativo TEXT,
-            telefono TEXT,
-            celular TEXT,
-            correo_electronico TEXT,
-            direccion TEXT,
-            codigo_postal TEXT,
-            ciudad TEXT,
-            estado TEXT,
-            pais TEXT,
-            fecha_nacimiento TEXT,
-            edad INTEGER,
-            genero TEXT,
-            estado_civil TEXT,
-            profesion TEXT,
-            funcion TEXT,
-            centro_trabajo TEXT,
-            sector TEXT,
-            zona TEXT,
-            modalidad TEXT,
-            estudios TEXT,
-            fecha_ingreso TEXT,
-            rfc TEXT,
-            curp TEXT,
-            antiguedad INTEGER,
-            observaciones TEXT
+            {", ".join(campos_sql)}
         )
         ''')
 
         # Insertar registros
         for i, registro in enumerate(registros):
-            # Preparar los campos
-            campos = {
-                "id": i + 1,
-                "nombre_completo": registro.get("nombre", "")
-            }
+            # Añadir ID al registro
+            campos = {"id": i + 1}
 
-            # Extraer nombre, apellido paterno y materno
-            nombre_completo = registro.get("nombre", "")
-            partes_nombre = nombre_completo.split()
-
-            if len(partes_nombre) >= 3:
-                campos["nombre"] = " ".join(partes_nombre[:-2])
-                campos["apellido_paterno"] = partes_nombre[-2]
-                campos["apellido_materno"] = partes_nombre[-1]
-            elif len(partes_nombre) == 2:
-                campos["nombre"] = partes_nombre[0]
-                campos["apellido_paterno"] = partes_nombre[1]
-                campos["apellido_materno"] = ""
-            else:
-                campos["nombre"] = nombre_completo
-                campos["apellido_paterno"] = ""
-                campos["apellido_materno"] = ""
-
-            # Copiar el resto de campos
+            # Copiar todos los campos del registro
             for campo, valor in registro.items():
-                if campo != "nombre":
-                    campos[campo.lower()] = valor
+                # Normalizar el nombre del campo para asegurar que sea válido en SQLite
+                campo_normalizado = campo
+
+                # Verificar si el campo contiene caracteres especiales
+                if any(char in campo for char in ["=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*", " ", ".", "(", ")"]):
+                    # Normalizar el campo
+                    campo_normalizado = campo.lower()
+                    # Reemplazar caracteres especiales
+                    for char in [" ", ".", "(", ")", "\n", "=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*"]:
+                        campo_normalizado = campo_normalizado.replace(char, "_")
+                    # Eliminar guiones bajos múltiples
+                    while "__" in campo_normalizado:
+                        campo_normalizado = campo_normalizado.replace("__", "_")
+                    # Eliminar guiones bajos al inicio y final
+                    campo_normalizado = campo_normalizado.strip("_")
+
+                # Asegurarse de que el campo no esté vacío
+                if not campo_normalizado:
+                    campo_normalizado = f"campo_{len(campos)}"
+
+                campos[campo_normalizado] = valor
 
             # Preparar la consulta SQL
-            campos_str = ", ".join(campos.keys())
+            campos_str = ", ".join([f'"{campo}"' for campo in campos.keys()])
             placeholders = ", ".join(["?" for _ in campos])
 
             # Ejecutar la consulta
@@ -122,9 +135,23 @@ def crear_base_datos(registros: List[Dict[str, Any]]) -> Dict[str, Any]:
             )
 
         # Crear índices para búsquedas rápidas
-        cursor.execute("CREATE INDEX idx_nombre ON contactos (nombre_completo)")
-        cursor.execute("CREATE INDEX idx_zona ON contactos (zona)")
-        cursor.execute("CREATE INDEX idx_funcion ON contactos (funcion)")
+        # Verificar si las columnas existen antes de crear índices
+        cursor.execute("PRAGMA table_info(contactos)")
+        columnas_existentes = [info[1] for info in cursor.fetchall()]
+
+        # Crear índice para nombre_completo si existe
+        if "nombre_completo" in columnas_existentes:
+            cursor.execute('CREATE INDEX idx_nombre ON contactos ("nombre_completo")')
+
+        # Buscar columnas relacionadas con zona
+        columnas_zona = [col for col in columnas_existentes if "zona" in col.lower()]
+        if columnas_zona:
+            cursor.execute(f'CREATE INDEX idx_zona ON contactos ("{columnas_zona[0]}")')
+
+        # Buscar columnas relacionadas con función
+        columnas_funcion = [col for col in columnas_existentes if "funcion" in col.lower() or "función" in col.lower()]
+        if columnas_funcion:
+            cursor.execute(f'CREATE INDEX idx_funcion ON contactos ("{columnas_funcion[0]}")')
 
         # Guardar cambios
         conn.commit()
@@ -226,15 +253,22 @@ def normalizar_texto(texto: str) -> str:
 
 # Mapeo de atributos a columnas de la base de datos
 MAPEO_ATRIBUTOS = {
-    "telefono": ["telefono", "celular", "teléfono", "móvil", "movil", "numero", "número", "contacto"],
-    "direccion": ["direccion", "dirección", "domicilio", "casa", "ubicación", "ubicacion", "vive", "domicilio"],
-    "correo_electronico": ["correo_electronico", "correo", "email", "mail", "correo electrónico", "e-mail"],
-    "funcion": ["funcion", "función", "trabajo", "empleo", "puesto", "cargo", "director", "docente", "subdirector"],
-    "estudios": ["estudios", "grado", "educación", "educacion", "formación", "formacion", "licenciatura", "maestría", "doctorado"],
+    "telefono_particular": ["telefono", "teléfono", "telefono particular", "teléfono particular", "numero", "número", "contacto"],
+    "telefono_celular": ["celular", "móvil", "movil", "celular", "teléfono celular", "telefono celular", "móvil", "movil"],
+    "domicilio_particular": ["direccion", "dirección", "domicilio", "casa", "ubicación", "ubicacion", "vive", "domicilio"],
+    "direccion_de_correo_electronico": ["correo_electronico", "correo", "email", "mail", "correo electrónico", "e-mail"],
+    "funcion_especifica": ["funcion", "función", "trabajo", "empleo", "puesto", "cargo", "director", "docente", "subdirector"],
+    "ultimo_grado_de_estudios": ["estudios", "grado", "educación", "educacion", "formación", "formacion", "licenciatura", "maestría", "doctorado"],
     "estado_civil": ["estado_civil", "casado", "soltero", "divorciado", "viudo", "civil"],
     "zona": ["zona", "área", "area", "sector", "región", "region"],
-    "centro_trabajo": ["centro_trabajo", "escuela", "centro", "trabajo", "institución", "institucion"],
-    "fecha_ingreso": ["fecha_ingreso", "ingreso", "antigüedad", "antiguedad", "cuando ingresó", "cuando ingreso"]
+    "nombre_del_ct": ["centro_trabajo", "escuela", "centro", "trabajo", "institución", "institucion", "nombre del ct", "nombre del centro de trabajo"],
+    "fecha_ingreso_a_la_sep": ["fecha_ingreso", "ingreso", "antigüedad", "antiguedad", "cuando ingresó", "cuando ingreso"],
+    "el_trabajador_cuenta_con_doble_plaza": ["doble plaza", "plaza doble", "dos plazas", "tiene doble plaza", "cuenta con doble plaza"],
+    "clave_de_ct_en_el_que_labora": ["clave ct labora", "clave del ct donde labora", "clave centro trabajo labora", "clave donde labora", "ct donde labora"],
+    "clave_del_ct_en_el_que_cobra_recibo_de_pago": ["clave ct cobra", "clave del ct donde cobra", "clave centro trabajo cobra", "clave donde cobra", "ct donde cobra"],
+    "clave_presupuestal_completa_igual_al_talon_de_pago_partiendo_del_07": ["clave presupuestal", "clave de presupuesto", "presupuestal"],
+    "tel_del_ct": ["teléfono ct", "telefono ct", "teléfono del centro", "telefono del centro", "tel ct", "tel del ct"],
+    "observacion": ["observaciones", "observación", "observacion", "notas", "comentarios", "información adicional", "informacion adicional"]
 }
 
 def mapear_atributo(atributo: str) -> str:
@@ -252,9 +286,41 @@ def mapear_atributo(atributo: str) -> str:
 
     atributo_norm = normalizar_texto(atributo)
 
+    # Verificar si hay una coincidencia directa en el mapeo
     for columna, sinonimos in MAPEO_ATRIBUTOS.items():
         if atributo_norm in sinonimos or any(s in atributo_norm for s in sinonimos):
             return columna
+
+    # Si no hay coincidencia directa, normalizar el atributo como se hace con los campos
+    campo_normalizado = atributo.lower()
+    # Reemplazar caracteres especiales
+    for char in [" ", ".", "(", ")", "\n", "=", "-", "/", "\\", ":", ";", ",", "'", '"', "?", "¿", "!", "¡", "%", "&", "$", "#", "@", "+", "*"]:
+        campo_normalizado = campo_normalizado.replace(char, "_")
+    # Eliminar guiones bajos múltiples
+    while "__" in campo_normalizado:
+        campo_normalizado = campo_normalizado.replace("__", "_")
+    # Eliminar guiones bajos al inicio y final
+    campo_normalizado = campo_normalizado.strip("_")
+
+    # Verificar si existe una columna con este nombre normalizado
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(contactos)")
+        columnas_existentes = [info[1] for info in cursor.fetchall()]
+        conn.close()
+
+        # Buscar coincidencias exactas o parciales
+        for col in columnas_existentes:
+            if col.lower() == campo_normalizado:
+                return col
+
+        # Buscar coincidencias parciales si no hay exactas
+        for col in columnas_existentes:
+            if campo_normalizado in col.lower() or col.lower() in campo_normalizado:
+                return col
+    except:
+        pass  # Si hay algún error, simplemente continuar
 
     return atributo
 
@@ -273,6 +339,17 @@ def generar_consulta_sql(parametros: Dict[str, Any]) -> Dict[str, Any]:
         "parametros": [],
         "tipo": parametros.get("tipo_consulta", "")
     }
+
+    # Obtener las columnas existentes en la tabla
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(contactos)")
+        columnas_existentes = [info[1] for info in cursor.fetchall()]
+        conn.close()
+    except:
+        # Si hay algún error, usar una lista vacía
+        columnas_existentes = []
 
     # Mapear atributo si existe
     if "atributo" in parametros and parametros["atributo"]:
@@ -320,14 +397,18 @@ def generar_consulta_sql(parametros: Dict[str, Any]) -> Dict[str, Any]:
                     condiciones.append("LOWER(nombre_alternativo) LIKE ?")
                     params.append(f"%{token}%")
 
-                    condiciones.append("LOWER(nombre) LIKE ?")
-                    params.append(f"%{token}%")
+                    # Verificar si las columnas existen antes de añadirlas a las condiciones
+                    if "nombre_s" in columnas_existentes:
+                        condiciones.append("LOWER(nombre_s) LIKE ?")
+                        params.append(f"%{token}%")
 
-                    condiciones.append("LOWER(apellido_paterno) LIKE ?")
-                    params.append(f"%{token}%")
+                    if "apellido_paterno" in columnas_existentes:
+                        condiciones.append("LOWER(apellido_paterno) LIKE ?")
+                        params.append(f"%{token}%")
 
-                    condiciones.append("LOWER(apellido_materno) LIKE ?")
-                    params.append(f"%{token}%")
+                    if "apellido_materno" in columnas_existentes:
+                        condiciones.append("LOWER(apellido_materno) LIKE ?")
+                        params.append(f"%{token}%")
 
             # Búsqueda por combinaciones de tokens (para nombres compuestos)
             if len(tokens) >= 3:
